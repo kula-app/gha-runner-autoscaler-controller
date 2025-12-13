@@ -1,0 +1,24 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+# Build the binary for development
+cmd = "go build -o ./tmp/controller ./cmd/controller"
+# Run the binary
+entrypoint = "./tmp/controller"
+
+# Watch configuration
+include_ext = ["go"]
+exclude_dir = [".git", ".github", ".vscode", "tmp", "dist"]
+exclude_regex = ["_test.go"]
+exclude_unchanged = true
+
+[log]
+time = true
+
+[misc]
+clean_on_exit = true
+
+[screen]
+clear_on_rebuild = true
+keep_scroll = true
