@@ -30,7 +30,7 @@ jobs:
 
       - name: Install dprint
         run: |
-          curl -fsSL https://dprint.dev/install.sh | sh -s > /dev/null 2>&1
+          curl -fsSL https://dprint.dev/install.sh | sh -s > /dev/null
           echo "$HOME/.dprint/bin" >> $GITHUB_PATH
 
       - name: Run Format Check
