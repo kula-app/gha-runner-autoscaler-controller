@@ -107,6 +107,17 @@ build-docker:
 dev:
 	go tool air -c .air.toml
 
+## Run controller with hot reload in dry-run mode
+#
+# Same as 'make dev' but with --dry-run flag enabled.
+# The controller will calculate changes but NOT apply them to the cluster.
+# Perfect for safely testing the allocation logic.
+#
+# Air configuration is in .air-dry-run.toml file.
+.PHONY: dev-dry-run
+dev-dry-run:
+	go tool air -c .air-dry-run.toml
+
 ## Run controller directly without hot reload
 #
 # Runs the controller directly using 'go run'. Useful for:
@@ -120,6 +131,14 @@ dev:
 .PHONY: run
 run:
 	go run ./cmd/controller
+
+## Run controller directly in dry-run mode
+#
+# Same as 'make run' but with --dry-run flag enabled.
+# The controller will calculate changes but NOT apply them to the cluster.
+.PHONY: run-dry-run
+run-dry-run:
+	go run ./cmd/controller --dry-run
 
 # ============================================================================
 # TESTING & QUALITY ASSURANCE
