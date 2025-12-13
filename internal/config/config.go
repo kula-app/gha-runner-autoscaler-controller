@@ -17,6 +17,9 @@ const (
 
 	// AnnotationPriority sets allocation priority (higher = allocated first)
 	AnnotationPriority = "kula.app/gha-runner-autoscaler-priority"
+
+	// AnnotationMinRunners sets minimum guaranteed maxRunners (doesn't keep pods running)
+	AnnotationMinRunners = "kula.app/gha-runner-autoscaler-min-runners"
 )
 
 // Config represents the controller configuration

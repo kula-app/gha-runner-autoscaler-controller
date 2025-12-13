@@ -230,6 +230,51 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 }
 ```
 
+### Annotation Patterns
+
+**Adding New Annotations:**
+
+When adding a new annotation, follow this pattern:
+
+1. **Define constant** in `internal/config/config.go`:
+
+```go
+const (
+    AnnotationEnabled = "kula.app/gha-runner-autoscaler-enabled"
+    AnnotationMinRunners = "kula.app/gha-runner-autoscaler-min-runners"  // New annotation
+)
+```
+
+2. **Add field** to struct in `internal/controller/resources.go`:
+
+```go
+type RunnerSetResources struct {
+    Name       string
+    MinRunners int  // New field
+    // ... other fields
+}
+```
+
+3. **Parse annotation** in `ExtractRunnerSetResources()`:
+
+```go
+// Extract min runners from annotation
+if minRunnersStr, ok := rs.Annotations[config.AnnotationMinRunners]; ok {
+    minRunners, err := strconv.Atoi(minRunnersStr)
+    if err != nil {
+        return nil, fmt.Errorf("invalid min-runners annotation: %w", err)
+    }
+    if minRunners < 0 {
+        return nil, fmt.Errorf("min-runners must be non-negative, got %d", minRunners)
+    }
+    resources.MinRunners = minRunners
+}
+```
+
+4. **Use in allocation logic** in `internal/controller/allocator.go`
+
+5. **Document** in `docs/ANNOTATIONS.md`
+
 ### Resource Calculations
 
 **CPU and Memory Handling:**
@@ -253,6 +298,99 @@ func parseMemory(memString string) (int64, error) {
         return 0, err
     }
     return q.Value(), nil // Always use bytes
+}
+```
+
+**Important Resource Calculation Rules:**
+
+1. **Always use int64** for CPU (millicores) and memory (bytes)
+2. **Integer division** rounds down - be aware when calculating runner counts
+3. **Track both CPU and memory** - use the minimum (most constrained resource)
+4. **Validate non-negative** values to prevent negative capacity
+
+```go
+// Calculate how many runners fit in available capacity
+maxByCPU := availableCPUMillis / rs.CPUMillis
+maxByMemory := availableMemoryBytes / rs.MemoryBytes
+
+// Take minimum (most constrained resource)
+maxRunners := max(0, min(maxByCPU, maxByMemory))
+```
+
+### Allocation Algorithm Patterns
+
+**Fair Share vs Greedy Allocation:**
+
+This project uses **fair share allocation with priority weights** to distribute capacity fairly while respecting priorities.
+
+**Fair Share Allocation (Current):**
+
+- Each runner set gets proportional share based on priority weight
+- Example: Priority 400 gets 2× the capacity of priority 200
+- Prevents high-priority from starving low-priority runner sets
+- Better for workloads with mostly small jobs and occasional large jobs
+
+```go
+// Calculate proportional share
+totalWeight := sum of all priorities
+cpuShare := (availableCPU * runnerSet.Priority) / totalWeight
+memoryShare := (availableMemory * runnerSet.Priority) / totalWeight
+```
+
+**Greedy Allocation (Legacy):**
+
+- Allocate to highest priority first until maxRunners or capacity exhausted
+- Then move to next priority level
+- Simple but can starve low-priority runner sets
+- Only use if you want strict priority ordering
+
+**Two-Pass Allocation Pattern:**
+
+1. **First Pass: Fair Share**
+   - Calculate proportional shares for all runner sets
+   - Apply configured max caps
+   - Enforce minimum guarantees
+
+2. **Second Pass: Redistribution**
+   - Calculate remaining capacity (from caps and minimums)
+   - Redistribute to runner sets by priority order
+   - Ensures all available capacity is utilized
+
+```go
+// First pass: fair share
+for _, rs := range runnerSets {
+    share := calculateShare(rs, totalWeight)
+    maxRunners := min(share, rs.ConfiguredMax)
+    // Enforce minimum
+    if rs.MinRunners > maxRunners {
+        maxRunners = rs.MinRunners
+    }
+}
+
+// Second pass: redistribute remaining
+remainingCPU := available - allocated
+for _, rs := range sortedByPriority(runnerSets) {
+    if rs.MaxRunners < rs.ConfiguredMax {
+        additional := min(remaining / rs.CPUPerRunner, rs.ConfiguredMax - rs.MaxRunners)
+        rs.MaxRunners += additional
+    }
+}
+```
+
+**Minimum Guarantees Pattern:**
+
+- Use `MinRunners` annotation to guarantee minimum allocation
+- Enforced AFTER fair share calculation
+- Can exceed available capacity (warn but allow)
+- Complements fair share for predictable minimums
+
+```go
+// Enforce minimum after fair share
+if rs.MinRunners > 0 && allocation < rs.MinRunners {
+    allocation = rs.MinRunners
+    logger.Debug("enforcing minimum runners",
+        "name", rs.Name,
+        "min_runners", rs.MinRunners)
 }
 ```
 
@@ -374,6 +512,83 @@ func TestCalculateAvailableCapacity(t *testing.T) {
         })
     }
 }
+```
+
+### Testing Allocation Algorithms
+
+**ALWAYS include detailed capacity calculations in test comments** to make expectations clear and debuggable.
+
+**Test Pattern for Allocators:**
+
+```go
+func TestAllocator_AllocateFairShare(t *testing.T) {
+    tests := []struct {
+        name                 string
+        runnerSets           []*RunnerSetResources
+        availableCPUMillis   int64
+        availableMemoryBytes int64
+        want                 map[string]int // name -> maxRunners
+    }{
+        {
+            name: "fair distribution with different priorities",
+            runnerSets: []*RunnerSetResources{
+                {Name: "high", CPUMillis: 1000, MemoryBytes: 2 * 1024 * 1024 * 1024, Priority: 400, ConfiguredMax: 20},
+                {Name: "low", CPUMillis: 1000, MemoryBytes: 2 * 1024 * 1024 * 1024, Priority: 100, ConfiguredMax: 20},
+            },
+            availableCPUMillis:   10000,                   // 10 CPUs
+            availableMemoryBytes: 20 * 1024 * 1024 * 1024, // 20Gi
+            want: map[string]int{
+                // Total weight = 400 + 100 = 500
+                // high: 400/500 = 80% -> 8 CPUs, 16Gi -> 8 runners
+                // low: 100/500 = 20% -> 2 CPUs, 4Gi -> 2 runners
+                "high": 8,
+                "low":  2,
+            },
+        },
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            allocator := NewAllocator(logger)
+            allocations, err := allocator.AllocateFairShare(
+                tt.runnerSets,
+                tt.availableCPUMillis,
+                tt.availableMemoryBytes,
+            )
+            // Assert allocations match expected...
+        })
+    }
+}
+```
+
+**Important Test Cases for Allocators:**
+
+1. **Fair distribution** - Multiple runner sets with different priorities
+2. **Minimum enforcement** - MinRunners exceeds fair share allocation
+3. **Configured max caps** - MaxRunners caps prevent overallocation
+4. **Tight capacity** - Minimums approach or exceed available capacity
+5. **CPU vs memory constraints** - Different resources are the bottleneck
+6. **Redistribution** - Unused capacity (from caps) redistributed by priority
+7. **Edge cases** - Zero capacity, empty runner sets, zero priority
+
+**Testing Realistic Scenarios:**
+
+Include tests that mirror production workloads:
+
+```go
+{
+    name: "realistic scenario - small jobs more common",
+    runnerSets: []*RunnerSetResources{
+        {Name: "xxl", CPUMillis: 7000, MemoryBytes: 24 * 1024 * 1024 * 1024, Priority: 500, MinRunners: 1, ConfiguredMax: 10},
+        {Name: "xl", CPUMillis: 4000, MemoryBytes: 16 * 1024 * 1024 * 1024, Priority: 400, MinRunners: 1, ConfiguredMax: 10},
+        {Name: "default", CPUMillis: 2000, MemoryBytes: 12 * 1024 * 1024 * 1024, Priority: 300, MinRunners: 2, ConfiguredMax: 10},
+        {Name: "small", CPUMillis: 1000, MemoryBytes: 8 * 1024 * 1024 * 1024, Priority: 200, MinRunners: 2, ConfiguredMax: 10},
+        {Name: "xs", CPUMillis: 250, MemoryBytes: 1 * 1024 * 1024 * 1024, Priority: 100, MinRunners: 3, ConfiguredMax: 10},
+    },
+    availableCPUMillis:   48000,  // 48 CPUs (realistic cluster size)
+    availableMemoryBytes: 192 * 1024 * 1024 * 1024,  // 192Gi
+    // Expected results with detailed calculations in comments...
+},
 ```
 
 ### Integration Testing

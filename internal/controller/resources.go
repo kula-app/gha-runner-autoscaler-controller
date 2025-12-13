@@ -16,6 +16,7 @@ type RunnerSetResources struct {
 	CPUMillis     int64
 	MemoryBytes   int64
 	Priority      int
+	MinRunners    int // Minimum guaranteed maxRunners (doesn't keep pods running)
 	CurrentMax    int
 	ConfiguredMax int // From original spec, used as cap
 }
@@ -46,6 +47,18 @@ func ExtractRunnerSetResources(rs *actionsv1alpha1.AutoscalingRunnerSet) (*Runne
 			return nil, fmt.Errorf("invalid priority annotation: %w", err)
 		}
 		resources.Priority = priority
+	}
+
+	// Extract min runners from annotation
+	if minRunnersStr, ok := rs.Annotations[config.AnnotationMinRunners]; ok {
+		minRunners, err := strconv.Atoi(minRunnersStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid min-runners annotation: %w", err)
+		}
+		if minRunners < 0 {
+			return nil, fmt.Errorf("min-runners must be non-negative, got %d", minRunners)
+		}
+		resources.MinRunners = minRunners
 	}
 
 	// Try to get CPU from annotation first

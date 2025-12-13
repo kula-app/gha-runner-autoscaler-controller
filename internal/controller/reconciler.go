@@ -130,8 +130,8 @@ func (r *Reconciler) ReconcileOnce(ctx context.Context) error {
 		return nil
 	}
 
-	// 4. Calculate new maxRunners for each runner set
-	allocations, err := r.allocator.Allocate(enabledRunnerSets, capacity.AvailableCPUMillis, capacity.AvailableMemoryBytes)
+	// 4. Calculate new maxRunners for each runner set using fair share allocation
+	allocations, err := r.allocator.AllocateFairShare(enabledRunnerSets, capacity.AvailableCPUMillis, capacity.AvailableMemoryBytes)
 	if err != nil {
 		return fmt.Errorf("failed to allocate runners: %w", err)
 	}
