@@ -155,6 +155,15 @@ run-dry-run:
 test:
 	go test ./...
 
+## Run tests with coverage report
+#
+# Executes all tests and generates a coverage report.
+# Coverage data is saved to coverage.out and a summary is displayed.
+.PHONY: test-coverage
+test-coverage:
+	go test -v -coverprofile=tmp/coverage.out ./...
+	go tool cover -func=tmp/coverage.out
+
 ## Run comprehensive static analysis and security checks
 #
 # Performs multiple code quality checks:
