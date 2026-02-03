@@ -11,7 +11,7 @@ tool (
 
 require (
 	github.com/actions/actions-runner-controller v0.27.6
-	github.com/lmittmann/tint v1.1.2
+	github.com/lmittmann/tint v1.1.3
 	github.com/mattn/go-isatty v0.0.20
 	k8s.io/api v0.34.1
 	k8s.io/apimachinery v0.34.1
